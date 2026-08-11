@@ -12,6 +12,7 @@ from sysbrokers.IB.ib_translate_broker_order_objects import (
     ibOrderCouldntCreateException,
 )
 from sysbrokers.IB.client.ib_orders_client import ibOrdersClient
+from sysbrokers.IB.ib_contracts import ibcontractWithLegs
 from sysbrokers.broker_execution_stack import brokerExecutionStackData
 from sysdata.data_blob import dataBlob
 from syscore.constants import arg_not_supplied, success
@@ -206,8 +207,8 @@ class ibExecutionStackData(brokerExecutionStackData):
         """
         try:
             try:
-                ib_contract = (
-                    trade_with_contract_from_ib.ibcontract_with_legs.ibcontract
+                ib_contract = _ib_contract_for_instrument_lookup(
+                    trade_with_contract_from_ib.ibcontract_with_legs
                 )
                 instrument_code = self.futures_instrument_data.get_instrument_code_from_broker_contract_object(
                     ib_contract
@@ -564,3 +565,23 @@ def match_control_order_from_dict(
     )
 
     return matched_control_order_from_dict
+
+
+def _ib_contract_for_instrument_lookup(
+    ibcontract_with_legs: ibcontractWithLegs,
+):
+    """
+    Pick the IB contract to use when resolving the instrument code.
+
+    For a combo/spread order IB hands us a BAG contract, and IB's API does not
+    support reqContractDetails on a BAG (it returns "Warning 321: 'BAG' isn't
+    supported for contract data request"). Each resolved leg is an ordinary
+    futures contract for the same instrument, so we use the first leg instead.
+    """
+    ib_contract = ibcontract_with_legs.ibcontract
+    legs = ibcontract_with_legs.legs
+
+    if getattr(ib_contract, "secType", "") == "BAG" and len(legs) > 0:
+        return legs[0]
+
+    return ib_contract
