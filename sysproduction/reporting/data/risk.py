@@ -504,6 +504,8 @@ def get_correlation_matrix_for_instruments(
 
 
 def cluster_correlation_matrix(cmatrix: correlationEstimate) -> correlationEstimate:
+    if cmatrix.size == 0:
+        return cmatrix
     cluster_size = min(5, int(cmatrix.size / 3))
     new_order = assets_in_cluster_order(cmatrix, cluster_size=cluster_size)
     cmatrix = cmatrix.list_in_key_order(new_order)

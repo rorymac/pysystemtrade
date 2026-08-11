@@ -323,6 +323,14 @@ class reportingApi(object):
 
     def get_correlations_for_configured_duplicates(self) -> table:
         pairs = generate_duplicate_pairs(self.data)
+        # No configured duplicate_instruments (or only placeholder defaults):
+        # skip correlation estimation rather than crash on an empty RangeIndex DF
+        if len(pairs) == 0:
+            return table(
+                "Potenially uncorrelated configured duplicates",
+                pd.DataFrame(columns=["included", "excluded", "correlation"]),
+            )
+
         corr_data = get_correlation_matrix_for_instruments(
             self.data, self._get_configured_duplicates_list(pairs)
         )
@@ -357,6 +365,13 @@ class reportingApi(object):
             for item in all_instruments
             if item not in self._get_configured_duplicates_list(pairs)
         ]
+
+        # Need at least two series to estimate pairwise correlations
+        if len(unconfigured) < 2:
+            return table(
+                "Potentially unconfigured duplicates",
+                pd.DataFrame(columns=["first", "second", "correlation"]),
+            )
 
         corr_data = get_correlation_matrix_for_instruments(self.data, unconfigured)
         corr_data = cluster_correlation_matrix(corr_data)

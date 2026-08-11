@@ -1,10 +1,45 @@
 from matplotlib.pyplot import title
 import datetime
 
+import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 import pandas as pd
 
 from syscore.constants import arg_not_supplied
 from syscore.dateutils import ROOT_BDAYS_INYEAR, BUSINESS_DAYS_IN_YEAR
+
+
+def _format_account_curve_date_axis(ax, index: pd.DatetimeIndex):
+    """
+    Replace pandas' default time-series tick labels with readable dates.
+
+    Chooses tick density from the span so short windows get months and longer
+    windows get quarters/years, always including the year where it matters.
+    """
+    if len(index) == 0:
+        return
+
+    span_days = max((index[-1] - index[0]).days, 1)
+
+    if span_days <= 100:
+        locator = mdates.WeekdayLocator(byweekday=mdates.MO, interval=2)
+        fmt = "%d %b %Y"
+    elif span_days <= 400:
+        locator = mdates.MonthLocator(interval=1)
+        fmt = "%b %Y"
+    elif span_days <= 1200:
+        locator = mdates.MonthLocator(interval=3)
+        fmt = "%b %Y"
+    else:
+        locator = mdates.YearLocator()
+        fmt = "%Y"
+
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter(fmt))
+    ax.xaxis.set_minor_locator(mticker.NullLocator())
+    plt.setp(ax.get_xticklabels(), rotation=30, ha="right")
+    ax.figure.autofmt_xdate()
 
 
 def make_account_curve_plot(
@@ -32,7 +67,10 @@ def make_account_curve_plot(
         ann_std,
         ann_sr,
     )
-    curve_to_plot.cumsum().plot()
+    cum = curve_to_plot.cumsum()
+    ax = plt.gca()
+    ax.plot(cum.index, cum.values)
+    _format_account_curve_date_axis(ax, cum.index)
     title(full_title)
 
 
@@ -64,7 +102,10 @@ def make_account_curve_plot_from_df(
         str(ann_std.round(3).to_dict()),
         str(ann_sr.round(2).to_dict()),
     )
-    curve_to_plot.cumsum().plot()
+    cum = curve_to_plot.cumsum()
+    ax = plt.gca()
+    ax.plot(cum.index, cum.values)
+    _format_account_curve_date_axis(ax, cum.index)
     title(full_title, fontdict=title_style)
 
 

@@ -14,13 +14,13 @@ from sysproduction.data.prices import (
     get_current_price_series,
 )
 from sysproduction.data.capital import capital_for_strategy
-from sysquant.estimators.correlations import correlationEstimate
+from sysquant.estimators.correlations import CorrelationList, correlationEstimate
 from sysquant.estimators.covariance import (
     covarianceEstimate,
     covariance_from_stdev_and_correlation,
 )
 from sysquant.estimators.stdev_estimator import stdevEstimates
-from sysquant.fitting_dates import IN_SAMPLE
+from sysquant.fitting_dates import IN_SAMPLE, listOfFittingDates
 
 
 def get_covariance_matrix_for_instrument_returns(
@@ -49,6 +49,9 @@ def get_correlation_matrix_for_instrument_returns(
     list_of_instruments: list,
     passed_correlation_estimation_parameters: dict = arg_not_supplied,
 ) -> correlationEstimate:
+    if len(list_of_instruments) == 0:
+        return correlationEstimate(np.zeros((0, 0)), columns=[])
+
     list_of_correlations = _replicate_creation_of_correlation_list_in_sim(
         data,
         list_of_instruments,
@@ -68,6 +71,15 @@ def _replicate_creation_of_correlation_list_in_sim(
     ## double coding but too complex to do differently
 
     returns_as_pd = get_perc_returns_across_instruments(data, list_of_instruments)
+    # Empty returns (no price history) yield a RangeIndex DataFrame; resample then fails
+    if returns_as_pd.empty:
+        empty_corr = correlationEstimate(np.zeros((0, 0)), columns=[])
+        return CorrelationList(
+            corr_list=[empty_corr],
+            column_names=[],
+            fit_dates=listOfFittingDates([]),
+        )
+
     corr_func, correlation_estimation_parameters = get_corr_params_and_func(
         data,
         passed_correlation_estimation_parameters=passed_correlation_estimation_parameters,
