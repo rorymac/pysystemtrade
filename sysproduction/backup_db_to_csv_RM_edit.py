@@ -300,9 +300,9 @@ def backup_spreads_to_csv(data: dataBlob):
 
 
 def backup_spreads_to_csv_for_instrument(data: dataBlob, instrument_code: str):
-    #RM Edit 
+    # RM Edit
     print(f"Processing spreads for instrument: {instrument_code}")
-    # further edit for error handling 
+    # further edit for error handling
     try:
         print(f"Processing spreads for instrument: {instrument_code}")
         db_data = data.db_spreads_for_instrument.get_spreads(instrument_code)
