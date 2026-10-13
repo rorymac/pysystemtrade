@@ -1,6 +1,8 @@
 import datetime
 
-from syscore.exceptions import missingData
+from typing import Optional
+
+from syscore.exceptions import ContractNotFound, missingData
 
 from sysdata.futures.contracts import futuresContractData
 from sysdata.futures.multiple_prices import futuresMultiplePricesData
@@ -27,6 +29,18 @@ from sysproduction.data.production_data_objects import (
 from sysdata.data_blob import dataBlob
 
 missing_expiry = datetime.datetime(1900, 1, 1)
+
+
+def _calendar_days_until(when: datetime.datetime) -> int:
+    """
+    Whole calendar days from today until when.
+
+    Subtracting datetimes and reading .days counts a contract that expires
+    today as already expired once the clock is past midnight, because a
+    negative timedelta normalises to -1 days plus a remainder. Expiry checks
+    elsewhere use the calendar date (futuresContract.days_until_expiry).
+    """
+    return (when.date() - datetime.datetime.now().date()).days
 
 
 class dataContracts(productionDataLayerGeneric):
@@ -56,24 +70,15 @@ class dataContracts(productionDataLayerGeneric):
 
     def days_until_roll(self, instrument_code) -> int:
         when_to_roll = self.when_to_roll_priced_contract(instrument_code)
-        now = datetime.datetime.now()
-        when_to_roll_days = (when_to_roll - now).days
-
-        return when_to_roll_days
+        return _calendar_days_until(when_to_roll)
 
     def days_until_price_expiry(self, instrument_code: str) -> int:
         price_expiry = self.get_priced_expiry(instrument_code)
-        now = datetime.datetime.now()
-        price_expiry_days = (price_expiry - now).days
-
-        return price_expiry_days
+        return _calendar_days_until(price_expiry)
 
     def days_until_carry_expiry(self, instrument_code: str) -> int:
         carry_expiry = self.get_carry_expiry(instrument_code)
-        now = datetime.datetime.now()
-        carry_expiry_days = (carry_expiry - now).days
-
-        return carry_expiry_days
+        return _calendar_days_until(carry_expiry)
 
     def is_contract_in_data(self, contract: futuresContract):
         instrument_code = contract.instrument_code
@@ -233,6 +238,82 @@ class dataContracts(productionDataLayerGeneric):
     def get_carry_expiry(self, instrument_code: str) -> expiryDate:
         contract_id = self._get_carry_contract_id(instrument_code)
         return self.get_actual_expiry(instrument_code, contract_id)
+
+    def replacement_for_expired_carry_contract(
+        self, instrument_code: str, carry_contract_id: str, priced_contract_id: str
+    ) -> Optional[str]:
+        """
+        Contract id to use for carry when the current one has already expired.
+
+        CarryOffset -1 is the nearer priced contract, which is preferred
+        (docs/data.md). For a held month that is not the front, that nearer
+        contract can expire before the priced contract is ready to roll
+        (docs/production.md: roll before carry expires, or carry prices go
+        stale). There is then no nearer contract left, so use the next
+        priced contract until the priced contract itself rolls.
+        """
+        try:
+            carry_contract = self.get_contract_from_db_given_code_and_id(
+                instrument_code, carry_contract_id
+            )
+        except ContractNotFound:
+            return None
+
+        if not carry_contract.expired():
+            return None
+
+        try:
+            priced_contract = self.get_contract_from_db_given_code_and_id(
+                instrument_code, priced_contract_id
+            )
+        except ContractNotFound:
+            return None
+
+        if priced_contract.expired():
+            self.log.critical(
+                "Priced contract %s for %s has expired as well as carry %s; roll the priced contract"
+                % (priced_contract_id, instrument_code, carry_contract_id)
+            )
+            return None
+
+        if int(self.get_roll_parameters(instrument_code).carry_offset) != -1:
+            self.log.warning(
+                "Carry contract %s for %s has expired but carry is not taken from the nearer contract; not switching"
+                % (carry_contract_id, instrument_code)
+            )
+            return None
+
+        priced_with_roll = self.get_contract_date_object_with_roll_parameters(
+            instrument_code, priced_contract_id
+        )
+        replacement_id = priced_with_roll.next_priced_contract().date_str
+
+        if replacement_id in (str(carry_contract_id), str(priced_contract_id)):
+            return None
+
+        try:
+            replacement_contract = self.get_contract_from_db_given_code_and_id(
+                instrument_code, replacement_id
+            )
+        except ContractNotFound:
+            self.log.warning(
+                "Carry contract %s for %s has expired but next priced contract %s is not in the database"
+                % (carry_contract_id, instrument_code, replacement_id)
+            )
+            return None
+
+        if replacement_contract.expired():
+            self.log.warning(
+                "Carry contract %s for %s has expired and the next priced contract %s has also expired"
+                % (carry_contract_id, instrument_code, replacement_id)
+            )
+            return None
+
+        self.log.warning(
+            "Carry contract %s for %s has expired; using next priced contract %s so carry prices do not stay stale"
+            % (carry_contract_id, instrument_code, replacement_id)
+        )
+        return replacement_id
 
     def when_to_roll_priced_contract(self, instrument_code: str) -> datetime.datetime:
         priced_contract_id = self.get_priced_contract_id(instrument_code)

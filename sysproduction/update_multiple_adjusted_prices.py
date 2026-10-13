@@ -10,21 +10,32 @@ Two types of services:
 
 """
 
+import numpy as np
+
 from syscore.constants import success
+from syscore.exceptions import missingData
 
 from sysobjects.dict_of_named_futures_per_contract_prices import (
+    contract_name_from_column_name,
     dictNamedFuturesContractFinalPrices,
     dictFuturesNamedContractFinalPricesWithContractID,
+    forward_name,
+    price_name,
 )
 
 from sysobjects.adjusted_prices import (
     no_update_roll_has_occurred,
     futuresAdjustedPrices,
 )
-from sysobjects.multiple_prices import futuresMultiplePrices, setOfNamedContracts
+from sysobjects.multiple_prices import (
+    futuresMultiplePrices,
+    setOfNamedContracts,
+    singleRowMultiplePrices,
+)
 from sysobjects.contracts import futuresContract
 
 from sysdata.data_blob import dataBlob
+from sysproduction.data.contracts import dataContracts
 from sysproduction.data.prices import (
     diagPrices,
     updatePrices,
@@ -140,6 +151,10 @@ def calc_updated_multiple_prices(
     existing_multiple_prices = diag_prices.get_multiple_prices(instrument_code)
 
     relevant_contracts = existing_multiple_prices.current_contract_dict()
+    existing_multiple_prices = switch_expired_carry_contract(
+        data, instrument_code, existing_multiple_prices, relevant_contracts
+    )
+    relevant_contracts = existing_multiple_prices.current_contract_dict()
 
     new_prices_dict = get_dict_of_new_prices_and_contractid(
         instrument_code, relevant_contracts, data
@@ -172,6 +187,79 @@ def calc_update_adjusted_prices(
         raise Exception(msg)
 
     return updated_adjusted_prices
+
+
+def switch_expired_carry_contract(
+    data: dataBlob,
+    instrument_code: str,
+    existing_multiple_prices: futuresMultiplePrices,
+    relevant_contracts: setOfNamedContracts,
+) -> futuresMultiplePrices:
+    """
+    Point carry at the next priced contract once the nearer one has expired.
+
+    This is not a price roll: PRICE and FORWARD stay where they are. Adjusted
+    prices only stitch when PRICE_CONTRACT changes.
+    """
+    diag_contracts = dataContracts(data)
+    replacement_id = diag_contracts.replacement_for_expired_carry_contract(
+        instrument_code,
+        carry_contract_id=str(relevant_contracts.carry),
+        priced_contract_id=str(relevant_contracts.price),
+    )
+    if replacement_id is None:
+        return existing_multiple_prices
+
+    return _append_carry_switch_row(
+        data, instrument_code, existing_multiple_prices, replacement_id
+    )
+
+
+def _append_carry_switch_row(
+    data: dataBlob,
+    instrument_code: str,
+    multiple_prices: futuresMultiplePrices,
+    new_carry_contract_id: str,
+) -> futuresMultiplePrices:
+    last = multiple_prices.iloc[-1]
+    carry_price = _latest_final_price(data, instrument_code, new_carry_contract_id)
+    switched_row = singleRowMultiplePrices(
+        price=_float_or_nan(last[price_name]),
+        forward=_float_or_nan(last[forward_name]),
+        carry=carry_price,
+        price_contract=str(last[contract_name_from_column_name(price_name)]),
+        forward_contract=str(last[contract_name_from_column_name(forward_name)]),
+        carry_contract=str(new_carry_contract_id),
+    )
+    return switched_row.concat_with_multiple_prices(multiple_prices)
+
+
+def _latest_final_price(
+    data: dataBlob, instrument_code: str, contract_id: str
+) -> float:
+    diag_prices = diagPrices(data)
+    contract = futuresContract(instrument_code, contract_id)
+    try:
+        prices = diag_prices.get_merged_prices_for_contract_object(
+            contract
+        ).return_final_prices()
+    except missingData:
+        return np.nan
+    prices = prices.dropna()
+    if len(prices) == 0:
+        return np.nan
+    return float(prices.iloc[-1])
+
+
+def _float_or_nan(value) -> float:
+    if value is None or (isinstance(value, float) and np.isnan(value)):
+        return np.nan
+    try:
+        if np.isnan(value):
+            return np.nan
+    except TypeError:
+        return np.nan
+    return float(value)
 
 
 def get_dict_of_new_prices_and_contractid(

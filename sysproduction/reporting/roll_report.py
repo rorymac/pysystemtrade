@@ -42,7 +42,10 @@ def roll_report(
         body_text(
             "roll_expiry is days until preferred roll set by roll parameters, "
             "price_expiry is days until price contract expires, "
-            "carry_expiry is days until carry contract expires"
+            "carry_expiry is days until carry contract expires. "
+            "A negative carry_expiry means that contract has already expired and "
+            "carry prices are stale; the multiple price update then uses the next "
+            "priced contract for carry until the priced contract itself is rolled"
         )
     )
     formatted_output.append(body_text("Contract suffix: p=price, f=forward, c=carry"))
